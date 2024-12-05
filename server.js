@@ -61,7 +61,7 @@ async function loadModel() {
 
     for (const shard of shardFiles) {
       const tempShardPath = path.join(__dirname, shard);
-      await downloadFileFromGCS(`${modelShardsPrefix}${shard}`, tempShardPath);
+      await downloadFileFromGCS(`models/${shard}`, tempShardPath);
     }
 
     // Memuat model dari file
