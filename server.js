@@ -9,7 +9,7 @@ const { Storage } = require("@google-cloud/storage");
 const admin = require("firebase-admin");
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT = 3000;
 
 app.use(bodyParser.json());
 
@@ -103,6 +103,13 @@ app.post("/predict", upload.single("image"), async (req, res) => {
       });
     }
 
+    if (req.file.size > 1000000) {
+      return res.status(413).json({
+        status: "fail",
+        message: "Payload content length greater than maximum allowed: 1000000",
+      });
+    }
+
     const buffer = fs.readFileSync(file.path);
     const uint8Array = new Uint8Array(buffer);
     let tensor;
@@ -133,7 +140,7 @@ app.post("/predict", upload.single("image"), async (req, res) => {
 
     await db.collection("predictions").doc(response.id).set(response);
 
-    res.status(200).json({
+    res.status(201).json({
       status: "success",
       message: "Model is predicted successfully",
       data: response,
