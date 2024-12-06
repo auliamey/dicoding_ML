@@ -9,7 +9,7 @@ const { Storage } = require("@google-cloud/storage");
 const admin = require("firebase-admin");
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+const port = process.env.PORT || 80;
 
 app.use(bodyParser.json());
 
