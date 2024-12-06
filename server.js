@@ -6,6 +6,7 @@ const tf = require("@tensorflow/tfjs-node");
 const fs = require("fs");
 const path = require("path");
 const { Storage } = require("@google-cloud/storage");
+const admin = require("firebase-admin");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -14,11 +15,19 @@ app.use(bodyParser.json());
 
 // Inisialisasi Google Cloud Storage client
 const storage = new Storage();
-const bucketName = "ml-model-bucket-4";  // Nama bucket Anda
-const modelPath = "models/model.json";  // Path model.json
-const modelShardsPrefix = "models/group1-shard";  // Prefix untuk shard
+const bucketName = "ml-model-bucket-4";  
+const modelPath = "models/model.json";
+
+const serviceAccount = require("./serviceAccountKey.json");
+
+admin.initializeApp({
+  credential: admin.credential.cert(serviceAccount)
+});
+
+const db = admin.firestore();
 
 const upload = multer({
+  dest: 'uploads/',
   limits: { fileSize: 1000000 },
   fileFilter(req, file, cb) {
     if (!file.mimetype.startsWith("image/")) {
@@ -28,7 +37,6 @@ const upload = multer({
   },
 });
 
-// Fungsi untuk mengunduh file dari Google Cloud Storage
 async function downloadFileFromGCS(gcsFilePath, localFilePath) {
   const options = {
     destination: localFilePath,
@@ -47,11 +55,9 @@ let model;
 
 async function loadModel() {
   try {
-    // Unduh file model.json
-    const tempModelPath = path.join(__dirname, "model.json");
+    const tempModelPath = path.join(__dirname, "models/model.json");
     await downloadFileFromGCS(modelPath, tempModelPath);
 
-    // Unduh semua shard model
     const shardFiles = [
       "group1-shard1of4.bin",
       "group1-shard2of4.bin",
@@ -60,17 +66,16 @@ async function loadModel() {
     ];
 
     for (const shard of shardFiles) {
-      const tempShardPath = path.join(__dirname, shard);
+      const tempShardPath = path.join(__dirname, `models/${shard}`);
       await downloadFileFromGCS(`models/${shard}`, tempShardPath);
     }
 
-    // Memuat model dari file
     model = await tf.loadGraphModel(`file://${tempModelPath}`);
     console.log("Model loaded successfully");
 
     // Menghapus file sementara setelah dimuat
-    fs.unlinkSync(tempModelPath);
-    shardFiles.forEach((shard) => fs.unlinkSync(path.join(__dirname, shard)));
+    // fs.unlinkSync(tempModelPath);
+    // shardFiles.forEach((shard) => fs.unlinkSync(path.join(__dirname, shard)));
 
   } catch (error) {
     console.error("Error loading model:", error);
@@ -91,13 +96,31 @@ app.post("/predict", upload.single("image"), async (req, res) => {
       });
     }
 
+    if (!file.path) {
+      return res.status(400).json({
+        status: "fail",
+        message: "File path is undefined",
+      });
+    }
+
     const buffer = fs.readFileSync(file.path);
-    const tensor = tf.node.decodeImage(buffer, 3);
+    const uint8Array = new Uint8Array(buffer);
+    let tensor;
+    try {
+      tensor = tf.node.decodeImage(uint8Array, 3);
+      console.log("Tensor decoded successfully");
+    } catch (err) {
+      console.error("Error decoding image:", err);
+    }
     const resized = tf.image.resizeBilinear(tensor, [224, 224]);
     const normalized = resized.div(255).expandDims(0); 
 
-    const prediction = await model.predict(normalized).dataSync(); 
-    const isCancer = prediction[0] > 0.5;
+    const prediction = await model.predict(normalized); 
+    const predictionData = await prediction.data(); 
+    const isCancer = predictionData[0] > 0.5;
+
+    console.log("pred",predictionData[0])
+    console.log(isCancer)
 
     const response = {
       id: uuidv4(),
@@ -107,6 +130,8 @@ app.post("/predict", upload.single("image"), async (req, res) => {
         : "Penyakit kanker tidak terdeteksi.",
       createdAt: new Date().toISOString(),
     };
+
+    await db.collection("predictions").doc(response.id).set(response);
 
     res.status(200).json({
       status: "success",
