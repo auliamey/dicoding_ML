@@ -15,23 +15,23 @@ app.use(bodyParser.json());
 
 // Inisialisasi Google Cloud Storage client
 const storage = new Storage();
-const bucketName = "ml-model-bucket-4";  
+const bucketName = "ml-model-bucket-4";
 const modelPath = "models/model.json";
 
 const serviceAccount = require("./serviceAccountKey.json");
 
 admin.initializeApp({
-  credential: admin.credential.cert(serviceAccount)
+  credential: admin.credential.cert(serviceAccount),
 });
 
 const db = admin.firestore();
 
 const upload = multer({
-  dest: 'uploads/',
-  limits: { fileSize: 1000000 },
+  dest: "uploads/",
+  limits: { fileSize: 1000000 }, // Batas ukuran file 1MB
   fileFilter(req, file, cb) {
     if (!file.mimetype.startsWith("image/")) {
-      return cb(new Error("File must be an image"));
+      return cb(new Error("Terjadi kesalahan dalam melakukan prediksi"));
     }
     cb(null, true);
   },
@@ -42,10 +42,7 @@ async function downloadFileFromGCS(gcsFilePath, localFilePath) {
     destination: localFilePath,
   };
 
-  await storage
-    .bucket(bucketName)
-    .file(gcsFilePath)
-    .download(options);
+  await storage.bucket(bucketName).file(gcsFilePath).download(options);
 
   console.log(`Downloaded ${gcsFilePath} to ${localFilePath}`);
 }
@@ -72,11 +69,6 @@ async function loadModel() {
 
     model = await tf.loadGraphModel(`file://${tempModelPath}`);
     console.log("Model loaded successfully");
-
-    // Menghapus file sementara setelah dimuat
-    // fs.unlinkSync(tempModelPath);
-    // shardFiles.forEach((shard) => fs.unlinkSync(path.join(__dirname, shard)));
-
   } catch (error) {
     console.error("Error loading model:", error);
   }
@@ -87,19 +79,6 @@ loadModel();
 
 app.post("/predict", upload.single("image"), async (req, res) => {
   try {
-    if (err) {
-      if (err.code === "LIMIT_FILE_SIZE") {
-        return res.status(413).json({
-          status: "fail",
-          message: "Payload content length greater than maximum allowed: 1000000",
-        });
-      }
-      return res.status(400).json({
-        status: "fail",
-        message: err.message || "Terjadi kesalahan dalam upload file",
-      });
-    }
-    
     const file = req.file;
 
     if (!file) {
@@ -109,33 +88,23 @@ app.post("/predict", upload.single("image"), async (req, res) => {
       });
     }
 
-    if (!file.path) {
-      return res.status(400).json({
-        status: "fail",
-        message: "File path is undefined",
-      });
-    }
-
     const buffer = fs.readFileSync(file.path);
     const uint8Array = new Uint8Array(buffer);
-    let tensor;
-    try {
-      tensor = tf.node.decodeImage(uint8Array, 3);
-    } catch (err) {
+
+    const tensor = tf.node.decodeImage(uint8Array, 3);
+    const resized = tf.image.resizeBilinear(tensor, [224, 224]);
+    const normalized = resized.div(255).expandDims(0);
+
+    const prediction = await model.predict(normalized);
+    const predictionData = await prediction.data();
+    const isCancer = predictionData[0] > 0.58;
+
+    if (predictionData[0] < 0.5) {
       return res.status(400).json({
         status: "fail",
         message: "Terjadi kesalahan dalam melakukan prediksi",
       });
     }
-    const resized = tf.image.resizeBilinear(tensor, [224, 224]);
-    const normalized = resized.div(255).expandDims(0); 
-
-    const prediction = await model.predict(normalized); 
-    const predictionData = await prediction.data(); 
-    const isCancer = predictionData[0] > 0.5;
-
-    console.log("pred",predictionData[0])
-    console.log(isCancer)
 
     const response = {
       id: uuidv4(),
@@ -148,7 +117,7 @@ app.post("/predict", upload.single("image"), async (req, res) => {
 
     await db.collection("predictions").doc(response.id).set(response);
 
-    res.status(200).json({
+    res.status(201).json({
       status: "success",
       message: "Model is predicted successfully",
       data: response,
@@ -162,13 +131,21 @@ app.post("/predict", upload.single("image"), async (req, res) => {
   }
 });
 
+// Middleware untuk menangani error file yang melebihi batas ukuran
 app.use((err, req, res, next) => {
+  if (err.code === "LIMIT_FILE_SIZE") {
+    return res.status(413).json({
+      status: "fail",
+      message: "Payload content length greater than maximum allowed: 1000000",
+    });
+  }
+
   res.status(400).json({
     status: "fail",
-    message: err.message || "Terjadi kesalahan dalam melakukan prediksi",
+    message: "Terjadi kesalahan dalam melakukan prediksi",
   });
 });
 
-app.listen(PORT, '0.0.0.0', () => {
+app.listen(PORT, "0.0.0.0", () => {
   console.log(`Server running on http://IP:${PORT}`);
 });
