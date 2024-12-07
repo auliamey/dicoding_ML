@@ -87,6 +87,19 @@ loadModel();
 
 app.post("/predict", upload.single("image"), async (req, res) => {
   try {
+    if (err) {
+      if (err.code === "LIMIT_FILE_SIZE") {
+        return res.status(413).json({
+          status: "fail",
+          message: "Payload content length greater than maximum allowed: 1000000",
+        });
+      }
+      return res.status(400).json({
+        status: "fail",
+        message: err.message || "Terjadi kesalahan dalam upload file",
+      });
+    }
+    
     const file = req.file;
 
     if (!file) {
@@ -103,21 +116,16 @@ app.post("/predict", upload.single("image"), async (req, res) => {
       });
     }
 
-    if (req.file.size > 1000000) {
-      return res.status(413).json({
-        status: "fail",
-        message: "Payload content length greater than maximum allowed: 1000000",
-      });
-    }
-
     const buffer = fs.readFileSync(file.path);
     const uint8Array = new Uint8Array(buffer);
     let tensor;
     try {
       tensor = tf.node.decodeImage(uint8Array, 3);
-      console.log("Tensor decoded successfully");
     } catch (err) {
-      console.error("Error decoding image:", err);
+      return res.status(400).json({
+        status: "fail",
+        message: "Terjadi kesalahan dalam melakukan prediksi",
+      });
     }
     const resized = tf.image.resizeBilinear(tensor, [224, 224]);
     const normalized = resized.div(255).expandDims(0); 
@@ -140,7 +148,7 @@ app.post("/predict", upload.single("image"), async (req, res) => {
 
     await db.collection("predictions").doc(response.id).set(response);
 
-    res.status(201).json({
+    res.status(200).json({
       status: "success",
       message: "Model is predicted successfully",
       data: response,
